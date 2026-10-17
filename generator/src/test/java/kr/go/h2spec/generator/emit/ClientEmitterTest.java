@@ -1,5 +1,10 @@
 package kr.go.h2spec.generator.emit;
 
+import kr.go.h2spec.client.interceptor.PublicDataApiException;
+import kr.go.h2spec.client.interceptor.PublicDataErrorInterceptor;
+import kr.go.h2spec.generator.InterceptorProbe;
+import kr.go.h2spec.generator.ir.ErrorSpec;
+import kr.go.h2spec.generator.ir.GeneratorHints;
 import kr.go.h2spec.generator.ir.IrLoader;
 import kr.go.h2spec.generator.ir.ApiSpec;
 import kr.go.h2spec.generator.ir.IrSpec;
@@ -8,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -74,6 +80,39 @@ class ClientEmitterTest {
     }
 
     @Test
+    void 힌트가_가리키는_포맷_파라미터도_감추고_힌트의_값을_박는다() throws Exception {
+        // 국가교통정보센터의 type처럼 generator가 모르는 이름은 IR의 generatorHints로 알린다
+        IrSpec base = new IrLoader().load(resource("/ir/schema-example.json"));
+        List<RequestParameter> params = new java.util.ArrayList<>(base.api().requestParameters());
+        params.add(new RequestParameter("type", "query", "string", true, "xml 또는 json", null, "XML", null));
+        ApiSpec a = base.api();
+        IrSpec ir = new IrSpec(
+                new ApiSpec(a.apiId(), a.apiName(), a.description(), a.baseUrl(), a.endpoint(),
+                        a.httpMethod(), "XML", params, a.responseFields(), a.errorSpec()),
+                new GeneratorHints(base.generatorHints().targetPackage(),
+                        new GeneratorHints.ResponseFormatParameter("type", "XML")));
+
+        String source = new ClientEmitter().emit(ir);
+
+        assertFalse(source.contains("String type"), "메서드 시그니처에 포맷 파라미터가 남으면 안 된다");
+        assertTrue(source.contains("url.append(\"&type=XML\");"));
+        assertEquals(List.of(), ClientEmitter.methodParameters(ir).stream()
+                .map(RequestParameter::name).filter("type"::equals).toList());
+    }
+
+    @Test
+    void 힌트의_파라미터가_요청_파라미터에_없으면_힌트를_쓰지_않는다() throws Exception {
+        IrSpec base = withFormatParam("JSON");
+        IrSpec ir = new IrSpec(base.api(), new GeneratorHints(base.generatorHints().targetPackage(),
+                new GeneratorHints.ResponseFormatParameter("type", "JSON")));
+
+        String source = new ClientEmitter().emit(ir);
+
+        assertTrue(source.contains("url.append(\"&returnType=json\");"));
+        assertFalse(source.contains("&type="));
+    }
+
+    @Test
     void JSON이면_루트_언래핑을_켠_ObjectMapper를_만든다() throws Exception {
         // DTO의 @JsonRootName과 짝을 이룬다. 둘 중 하나만 있으면 역직렬화가 조용히 빈 객체를 낸다
         String source = new ClientEmitter().emit(withFormatParam("JSON"));
@@ -115,7 +154,6 @@ class ClientEmitterTest {
                 base.generatorHints());
     }
 
-    /** schema-example 기반 IR에서 serviceKey 파라미터 이름만 바꾼 IR */
     @Test
     void path_파라미터는_경로용_인코더로_치환한다() throws Exception {
         // URLEncoder는 공백을 +로 바꾸는데 경로 세그먼트에서 +는 공백이 아니라 글자 그대로다
@@ -142,6 +180,7 @@ class ClientEmitterTest {
         assertFalse(source.contains("encodePath"), "쓰이지 않는 헬퍼를 넣지 않는다");
     }
 
+    /** schema-example 기반 IR에서 serviceKey 파라미터 이름만 바꾼 IR */
     private IrSpec withServiceKeyNamed(String name) throws Exception {
         IrSpec base = new IrLoader().load(resource("/ir/schema-example.json"));
         List<kr.go.h2spec.generator.ir.RequestParameter> params = new java.util.ArrayList<>();
@@ -181,6 +220,58 @@ class ClientEmitterTest {
 
         assertTrue(source.contains("byte[] body = restTemplate.getForObject(uri, byte[].class);"));
         assertFalse(source.contains("String body = restTemplate.getForObject(uri, String.class);"));
+    }
+
+    @Test
+    void 결과코드_후보가_기본_이름뿐이거나_없으면_성공코드만_넘긴다() throws Exception {
+        // rule 엔진의 IR은 모두 기본 이름만 후보로 적는다. 골든 IR도 그렇다
+        IrSpec defaultCandidates = new IrLoader().load(resource("/ir/schema-example.json"));
+        IrSpec noCandidates = withErrorSpec(new ErrorSpec("00"));
+
+        assertFalse(defaultCandidates.api().errorSpec().resultCodeFieldCandidates().isEmpty());
+        for (IrSpec ir : List.of(defaultCandidates, noCandidates)) {
+            String source = new ClientEmitter().emit(ir);
+
+            assertTrue(source.contains("restTemplate.getInterceptors().add(new PublicDataErrorInterceptor(SUCCESS_CODE));"),
+                    source);
+            assertFalse(source.contains("import java.util.List;"), source);
+        }
+    }
+
+    @Test
+    void 기본_이름에_없는_결과코드_후보는_경로의_마지막_마디를_차례대로_한_번씩_넘긴다() throws Exception {
+        // 인터셉터는 위치가 아니라 이름으로 찾는다. 빈 후보와 기본 이름(resultCode, returnReasonCode)은 넘기지 않는다
+        IrSpec ir = withErrorSpec(new ErrorSpec("00", Arrays.asList(
+                "response.header.resultCd", "result.status[]", "resultCd", "response.header.resultCode",
+                "cmmMsgHeader.returnReasonCode", "", null, "response.")));
+
+        String source = new ClientEmitter().emit(ir);
+
+        assertTrue(source.contains("import java.util.List;"), source);
+        assertTrue(source.contains(
+                "restTemplate.getInterceptors().add(new PublicDataErrorInterceptor(SUCCESS_CODE, List.of(\"resultCd\", \"status\")));"),
+                source);
+    }
+
+    @Test
+    void 생성기가_넘기지_않는_기본_이름은_인터셉터가_기본으로_찾는다() {
+        // generator는 interceptor-core에 기대지 않아 기본 이름 목록을 따로 둔다. 인터셉터가 찾지 않는 이름을 빼면 결과코드를 놓친다
+        PublicDataErrorInterceptor defaultInterceptor = new PublicDataErrorInterceptor("00");
+
+        for (String key : ClientEmitter.BUILT_IN_RESULT_CODE_KEYS) {
+            PublicDataApiException e = assertThrows(PublicDataApiException.class,
+                    () -> InterceptorProbe.respond(defaultInterceptor, "{\"result\":{\"" + key + "\":\"30\"}}"), key);
+            assertEquals("30", e.getResultCode(), key);
+        }
+    }
+
+    private IrSpec withErrorSpec(ErrorSpec errorSpec) throws Exception {
+        IrSpec base = new IrLoader().load(resource("/ir/schema-example.json"));
+        ApiSpec a = base.api();
+        return new IrSpec(
+                new ApiSpec(a.apiId(), a.apiName(), a.description(), a.baseUrl(), a.endpoint(), a.httpMethod(),
+                        a.responseFormat(), a.requestParameters(), a.responseFields(), errorSpec),
+                base.generatorHints());
     }
 
     @Test
