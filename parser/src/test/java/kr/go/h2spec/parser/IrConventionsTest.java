@@ -80,6 +80,18 @@ class IrConventionsTest {
     }
 
     @Test
+    void Java_예약어인_API_ID는_패키지_마디에_밑줄을_붙인다() {
+        assertEquals("kr.go.h2spec.client.public_",
+                IrConventions.generatorHints("Public").get("targetPackage").asText());
+        assertEquals("kr.go.h2spec.client.short_",
+                IrConventions.generatorHints("Short").get("targetPackage").asText());
+        assertEquals("kr.go.h2spec.client.new_",
+                IrConventions.generatorHints("New").get("targetPackage").asText());
+        assertEquals("kr.go.h2spec.client.rtmsdatasvcapttradedev",
+                IrConventions.generatorHints("RTMSDataSvcAptTradeDev").get("targetPackage").asText());
+    }
+
+    @Test
     void 문서_라이브러리가_던진_RuntimeException도_문서를_읽지_못한_IOException으로_알린다() {
         DocumentReaders.Format broken = new DocumentReaders.Format("DOCX", document -> {
             throw new IllegalStateException("지원하지 않는 도형");
