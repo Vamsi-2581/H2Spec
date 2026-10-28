@@ -153,6 +153,24 @@ class ConvertCommandTest {
     }
 
     @Test
+    void package_옵션에서_예약어_API_ID의_패키지_마디를_고친다() throws Exception {
+        ObjectNode tree = readIr(irPath());
+        tree.with("api").put("apiId", "Public");
+        Path inputDir = Files.createDirectories(tempDir.resolve("input"));
+        Path ir = inputDir.resolve("public.json");
+        Files.writeString(ir, tree.toPrettyString());
+        Path output = tempDir.resolve("output");
+
+        int exit = new CommandLine(new H2SpecCli()).execute(
+                "convert", "--input", ir.toString(), "--output", output.toString(),
+                "--package", "com.example");
+
+        assertEquals(0, exit);
+        assertTrue(Files.exists(output.resolve("com/example/public_/PublicClient.java")));
+        assertTrue(Files.exists(output.resolve("com/example/public_/dto/PublicResponse.java")));
+    }
+
+    @Test
     void package_옵션이_DOCX_변환에도_적용되고_오퍼레이션별로_하위_패키지가_나뉜다() throws Exception {
         Path docx = Path.of(getClass().getResource("/docs/msrstn-info.docx").toURI());
 
