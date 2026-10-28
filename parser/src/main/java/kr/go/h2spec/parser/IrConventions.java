@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import javax.lang.model.SourceVersion;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -699,6 +700,18 @@ public final class IrConventions {
     }
 
     /**
+     * apiId를 하위 패키지 마디로 바꾼다. Java 예약어는 생성된 패키지에서 쓸 수 없으므로
+     * JavaNames와 같은 규칙으로 뒤에 밑줄을 붙인다.
+     *
+     * @param apiId 파서가 만든 API 식별자
+     * @return 기본 로캘과 무관한 소문자 패키지 마디, 예약어에는 뒤에 밑줄을 붙인 값
+     */
+    public static String operationPackageSegment(String apiId) {
+        String segment = apiId.toLowerCase(Locale.ROOT);
+        return SourceVersion.isKeyword(segment) ? segment + "_" : segment;
+    }
+
+    /**
      * IR의 generatorHints. 패키지명은 apiId로 만든다.
      *
      * @param apiId {@link #splitUrl}이 만든 apiId
@@ -709,7 +722,7 @@ public final class IrConventions {
         ObjectNode hints = JsonNodeFactory.instance.objectNode();
         hints.put("targetClientType", "RestTemplate");
         // 기본 로캘을 따르면 같은 문서도 PC에 따라 패키지가 달라진다(터키어 로캘의 "Info" → "ınfo")
-        hints.put("targetPackage", "kr.go.h2spec.client." + apiId.toLowerCase(Locale.ROOT));
+        hints.put("targetPackage", "kr.go.h2spec.client." + operationPackageSegment(apiId));
         hints.put("generateInterceptor", true);
         hints.put("generateDto", true);
         hints.put("dtoNamingStrategy", "PascalCase");
